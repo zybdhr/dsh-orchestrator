@@ -1,0 +1,32 @@
+{
+  "name": "dsh-local-orchestrator",
+  "version": "0.12.8",
+  "private": true,
+  "description": "DSH 多 Agent 编排：任务图、独立审核、有限重试和持久化恢复",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./tools": "./src/tools.js",
+    "./client": "./src/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["src", "cordis.patch.yml", "README.md"],
+  "engines": {"node": ">=22"},
+  "dependencies": {"@xterm/headless": "6.0.0"},
+  "peerDependencies": {
+    "@deepseek-ai/dsh-sdk-protocol": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-subprocess": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-subagent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check:share": "node .AAAtoool/share-project.mjs --check",
+    "share": "node .AAAtoool/share-project.mjs"
+  },
+  "dsh": {
+    "bundle": {"patch": "./cordis.patch.yml"},
+    "client": {"inject": ["@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-ui-conversation"], "platform": "web"}
+  }
+}

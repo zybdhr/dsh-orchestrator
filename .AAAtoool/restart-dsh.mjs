@@ -1,0 +1,46 @@
+import {readFileSync, readlinkSync, readdirSync, openSync, closeSync, writeFileSync, existsSync, accessSync, constants} from 'node:fs';
+import {join, isAbsolute, dirname, resolve} from 'node:path';
+import {spawn} from 'node:child_process';
+import {parseArgs} from 'node:util';
+import {homedir} from 'node:os';
+import {resolveProfile, localOrigin} from './shared-runtime.mjs';
+const {values, positionals} = parseArgs({allowPositionals: true, options: {home: {type: 'string'}, profile: {type: 'string'}, port: {type: 'string'}, host: {type: 'string'}, 'state-dir': {type: 'string'}, help: {type: 'boolean'}}});
+if (values.help) {console.log('仅 Linux：node .AAAtoool/restart-dsh.mjs PID 绝对日志路径 绝对报告路径 [--home 数据目录] [--profile web] [--port 3080] [--state-dir 自定义编排目录]'); process.exit(0);}
+if (process.platform !== 'linux') throw new Error('进程识别使用 Linux /proc；其他系统请手动正常重启 DSH');
+const [pidText, logPath, reportPath] = positionals;
+const pid=Number(pidText);
+if(!Number.isSafeInteger(pid)||pid<2||!isAbsolute(logPath??'')||!isAbsolute(reportPath??''))throw Error('参数：DSH PID、绝对日志路径、绝对报告路径');
+if(logPath===reportPath||existsSync(logPath)||existsSync(reportPath))throw Error('日志和报告必须使用不同且不存在的新文件');
+accessSync(dirname(logPath),constants.W_OK);accessSync(dirname(reportPath),constants.W_OK);
+const proc=`/proc/${pid}`;
+const argv=readFileSync(`${proc}/cmdline`,'utf8').split('\0').filter(Boolean);
+if(!/\/(?:\.bin\/dsh|@deepseek-ai\/dsh\/lib\/bin\.js)$/.test(argv[1] ?? '')||!(argv[2]==='web'||argv.includes('--profile')))throw Error('目标不是可识别的 DSH 进程');
+const cwd=readlinkSync(`${proc}/cwd`),exe=readlinkSync(`${proc}/exe`);
+const env=Object.fromEntries(readFileSync(`${proc}/environ`,'utf8').split('\0').filter(s=>s.includes('=')).map(s=>{const i=s.indexOf('=');return[s.slice(0,i),s.slice(i+1)];}));
+if(readFileSync(`${proc}/task/${pid}/children`,'utf8').trim())throw Error('DSH 仍有子进程，停止重启');
+const arg = name => argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined;
+const target = resolveProfile({home: values.home || env.DSH_HOME || join(env.HOME || homedir(), '.dsh'), profile: values.profile || arg('--profile') || 'web'});
+if(values.profile&&values.profile!==(arg('--profile')||'web'))throw Error('重启保留原 profile，不用于迁移 profile');
+if(values.home&&resolve(values.home)!==resolve(env.DSH_HOME||join(env.HOME||homedir(),'.dsh')))throw Error('重启保留原 DSH_HOME，不用于迁移数据目录');
+if(argv.includes('--tls-cert')||argv.includes('--public-url'))throw Error('TLS 或反向代理启动参数请手动重启并核对健康地址');
+if(values.port&&arg('--port')&&Number(values.port)!==Number(arg('--port')))throw Error('健康检查端口与原启动参数不一致');
+if(values.host&&arg('--host')&&values.host!==arg('--host'))throw Error('健康检查地址与原启动参数不一致');
+const origin = localOrigin(values.port || arg('--port') || 3080, values.host || arg('--host') || '127.0.0.1');
+const stateDir=values['state-dir'] || join(target.home, 'orchestrator');
+if(!isAbsolute(stateDir))throw Error('state-dir 必须为绝对路径');
+const runs=(existsSync(stateDir)?readdirSync(stateDir):[]).filter(n=>n.endsWith('.json')).map(n=>JSON.parse(readFileSync(join(stateDir,n),'utf8'))).filter(s=>s.id&&s.tasks);
+if(runs.some(s=>s.status==='running'||s.calls?.some(c=>['starting','running'].includes(c.status))))throw Error('还有运行中的编排任务，停止重启');
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+process.kill(pid,'SIGTERM');
+let stopped=false;
+for(let i=0;i<80;i++){try{process.kill(pid,0);}catch{stopped=true;break;}await delay(250);}
+if(!stopped)throw Error('原进程未正常退出，未强制终止或启动重复服务');
+const fd=openSync(logPath,'wx',0o600);
+const child=spawn(exe,[...argv.slice(1),...(argv.includes('--no-open')?[]:['--no-open'])],{cwd,env:{...env, DSH_HOME:target.home},detached:true,stdio:['ignore',fd,fd]});
+await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});closeSync(fd);child.unref();
+let ready=false;
+for(let i=0;i<80;i++){try{const res=await fetch(origin,{signal:AbortSignal.timeout(700)});if(res.status<500){ready=true;break;}}catch{}await delay(250);}
+const installed=join(target.directory,'node_modules/dsh-local-orchestrator/package.json');
+const report={ok:ready,previousPid:pid,pid:child.pid,origin,preservedRuns:runs.map(s=>({id:s.id,status:s.status})),version:existsSync(installed)?JSON.parse(readFileSync(installed)).version:null};
+writeFileSync(reportPath,JSON.stringify(report,null,2),{mode:0o600});console.log(JSON.stringify(report));
+if(!ready)process.exitCode=1;

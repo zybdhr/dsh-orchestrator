@@ -1,0 +1,53 @@
+- insert:
+    - id: local-orchestrator
+      name: dsh-local-orchestrator
+    - id: preset-orchestrator
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: orchestrator
+        name: 多 Agent 编排
+        description: 按任务图调度多个后端，独立审核、有限返工和检查点恢复。
+        order: 5
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: 你是多 Agent 编排的监控协调者。直接只读查看页面、文件和运行证据，通过编排引擎委派修改、命令及独立验收，根据真实状态汇报。默认以简体中文交流。
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: orchestrator-tools
+            name: dsh-local-orchestrator/tools
+          - id: monitor-files
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              read: true
+              readImage: true
+              write: false
+              edit: false
+          - id: monitor-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: monitor-web
+            name: '@deepseek-ai/dsh-tool-web'
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
