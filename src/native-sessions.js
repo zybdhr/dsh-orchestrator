@@ -223,14 +223,14 @@ export async function openCodexSession({request, config, options, previous, sign
   transport.onRequest(async (method, p) => {
     if (p.threadId !== threadId || (p.turnId != null && !matchTurn(p.turnId))) throw fail('Codex 交互请求归属不匹配');
     if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) {
-      const approved = options.executionPolicy?.approval === 'on-request' && await askAgentApproval({
+      const approved = options.approvalContext?.access === 'write' && options.executionPolicy?.approval === 'on-request' && await askAgentApproval({
         ...options.approvalContext, provider: 'Codex', title: options.approvalContext?.label ?? '执行任务',
         toolName: method === 'item/fileChange/requestApproval' ? '文件修改' : '命令执行', toolInput: p,
       });
       return {decision: approved && (!Array.isArray(p.availableDecisions) || p.availableDecisions.includes('accept')) ? 'accept' : 'decline'};
     }
     if (method === 'item/permissions/requestApproval') {
-      const approved = options.executionPolicy?.approval === 'on-request' && await askAgentApproval({
+      const approved = options.approvalContext?.access === 'write' && options.executionPolicy?.approval === 'on-request' && await askAgentApproval({
         ...options.approvalContext, provider: 'Codex', title: options.approvalContext?.label ?? '执行任务',
         toolName: '额外资源访问', toolInput: p,
       });
