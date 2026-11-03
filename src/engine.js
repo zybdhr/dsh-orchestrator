@@ -354,7 +354,7 @@ export class Orchestrator {
     const modelOptions = {model: target.model ?? '', reasoningEffort: target.reasoningEffort ?? ''};
     const access = phase === '审核' || operation === 'compact' ? 'read' : task.access;
     const resources = access === 'write' ? task.resources ?? {} : {};
-    const executionPolicy = resolveExecutionPolicy(this.config.executionPolicy, provider, access, resources);
+    const executionPolicy = ['codex', 'claude-code'].includes(provider) ? resolveExecutionPolicy(this.config.executionPolicy, provider, access, resources) : undefined;
     const binding = createHash('sha256').update(JSON.stringify({owner: s.owner, run: s.id, cwd: s.cwd, task: task.id,
       prompt: task.prompt, acceptance: task.acceptance, role: task.role, access: task.access, phase, provider, modelAlias, modelOptions})).digest('hex');
     task.sessions ??= {};
