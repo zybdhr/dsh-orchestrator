@@ -15,7 +15,7 @@ test('只读任务不能从管理员配置获得完全权限', () => {
   const policy = {codex: {sandbox: 'danger-full-access', approval: 'on-request'},
     claude: {writeMode: 'bypassPermissions'}};
   assert.deepEqual(resolveExecutionPolicy(policy, 'codex', 'read'),
-    {sandbox: 'read-only', approval: 'on-request'});
+    {sandbox: 'read-only', approval: 'never'});
   assert.deepEqual(resolveExecutionPolicy(policy, 'claude-code', 'read'),
     {permissionMode: 'dontAsk'});
 });
