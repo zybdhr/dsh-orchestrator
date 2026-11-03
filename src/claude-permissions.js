@@ -14,7 +14,7 @@ export const VERIFICATION_TOOLS = Object.freeze({
 });
 export function withClaudeTools(spec, {writeAccess = false, verification = []} = {}) {
   const index = spec.argv?.indexOf('--permission-mode') ?? -1;
-  if (index < 0 || (writeAccess && spec.argv[index + 1] !== 'acceptEdits')) throw new Error('Claude Code 参数接口发生变化，拒绝忽略权限设置');
+  if (index < 0 || (writeAccess && !['acceptEdits', 'default', 'bypassPermissions'].includes(spec.argv[index + 1]))) throw new Error('Claude Code 参数接口发生变化，拒绝忽略权限设置');
   if (spec.argv.includes('--allowedTools') || spec.argv.includes('--allowed-tools')) throw new Error('Claude Code 已设置工具许可，需要核对原生接口后合并');
   if (!Array.isArray(verification) || verification.some(v => !Object.hasOwn(VERIFICATION_TOOLS, v))) throw new Error('未知验证工具');
   const tools = [...new Set([...(writeAccess ? CLAUDE_WRITE_TOOLS : CLAUDE_READ_TOOLS), ...verification.flatMap(v => VERIFICATION_TOOLS[v])])];

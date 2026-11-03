@@ -9,6 +9,7 @@ import {NO_START_CAPABILITIES, assertUsableCwd, settleRunResult, subprocessRunHa
 import {scrubbedParentEnv} from '@deepseek-ai/dsh-subprocess';
 import {resolveCodexRuntime, codexErrorDetail} from './codex-runtime.js';
 import {withClaudeTools} from './claude-permissions.js';
+import {askAgentApproval} from './agent-approval.js';
 
 const idValid = id => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(id);
 const fail = (message, code = 'ORCHESTRATOR_SESSION_BLOCKED') => Object.assign(new Error(message), {code});
@@ -34,7 +35,7 @@ export async function createSessionProvider(ctx, provider, options, dependencies
   const config = original.config;
   const c = options.continuity;
   if (!c || typeof c.binding !== 'string' || typeof c.onSession !== 'function') throw fail('缺少会话归属信息');
-  const profileKey = hash({provider, config, model: options.model ?? '', effort: options.reasoningEffort ?? ''});
+  const profileKey = hash({provider, config, model: options.model ?? '', effort: options.reasoningEffort ?? '', executionPolicy: options.executionPolicy});
   const prior = c.previous;
   if (prior && (!idValid(prior.id) || prior.binding !== c.binding || prior.provider !== provider)) throw fail('会话身份或归属不匹配，拒绝恢复');
   const reusable = prior && prior.profileKey === profileKey;
@@ -109,12 +110,16 @@ export async function createSessionProvider(ctx, provider, options, dependencies
           opened(sessionId);
           const env = {...scrubbedParentEnv(), ...config.env,
             ...(options.reasoningEffort ? {CLAUDE_CODE_EFFORT_LEVEL: options.reasoningEffort} : {})};
-          const permissionMode = options.writeAccess ? 'acceptEdits' : config.permissionMode;
+          const permissionMode = options.executionPolicy?.permissionMode ?? (options.writeAccess ? 'acceptEdits' : config.permissionMode);
           const sdkOptions = {cwd: request.cwd, env, model: options.model || config.model, persistSession: true,
             ...(reusable ? {resume: prior.id} : {sessionId}), abortController: controller, permissionMode,
             settings: {autoCompactEnabled: true},
             disallowedTools: ['AskUserQuestion', 'ExitPlanMode'],
-            ...(permissionMode === 'bypassPermissions' ? {allowDangerouslySkipPermissions: true} : {canUseTool: async () => ({behavior: 'deny', message: '编排后端不能交互授权'})}),
+            ...(permissionMode === 'bypassPermissions' ? {allowDangerouslySkipPermissions: true} : {canUseTool: async (toolName, input) => {
+              if (!options.writeAccess) return {behavior: 'deny', message: '审核和只读任务不能提升工具权限'};
+              const approved = await askAgentApproval({...options.approvalContext, provider: 'Claude Code', title: options.approvalContext?.label ?? '执行任务', toolName, toolInput: input});
+              return approved ? {behavior: 'allow', updatedInput: input} : {behavior: 'deny', message: '此操作未获得用户授权'};
+            }}),
             onElicitation: async () => ({action: 'decline'}), onUserDialog: async () => ({behavior: 'cancelled'}), supportedDialogKinds: ['refusal_fallback_prompt'],
             spawnClaudeCodeProcess(spec) {
               const overlay = {...spec.env};
@@ -218,10 +223,19 @@ export async function openCodexSession({request, config, options, previous, sign
   transport.onRequest(async (method, p) => {
     if (p.threadId !== threadId || (p.turnId != null && !matchTurn(p.turnId))) throw fail('Codex 交互请求归属不匹配');
     if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) {
-      const decisions = p.availableDecisions;
-      return {decision: Array.isArray(decisions) && decisions.includes('cancel') ? 'cancel' : 'decline'};
+      const approved = options.approvalContext?.access === 'write' && options.executionPolicy?.approval === 'on-request' && await askAgentApproval({
+        ...options.approvalContext, provider: 'Codex', title: options.approvalContext?.label ?? '执行任务',
+        toolName: method === 'item/fileChange/requestApproval' ? '文件修改' : '命令执行', toolInput: p,
+      });
+      return {decision: approved && (!Array.isArray(p.availableDecisions) || p.availableDecisions.includes('accept')) ? 'accept' : 'decline'};
     }
-    if (method === 'item/permissions/requestApproval') return {permissions: {}, scope: 'turn'};
+    if (method === 'item/permissions/requestApproval') {
+      const approved = options.approvalContext?.access === 'write' && options.executionPolicy?.approval === 'on-request' && await askAgentApproval({
+        ...options.approvalContext, provider: 'Codex', title: options.approvalContext?.label ?? '执行任务',
+        toolName: '额外资源访问', toolInput: p,
+      });
+      return {permissions: approved ? p.permissions ?? {} : {}, scope: 'turn'};
+    }
     if (method === 'item/tool/requestUserInput') return {answers: {}};
     if (method === 'mcpServer/elicitation/request') return {action: 'decline', content: null, _meta: null};
     throw fail('不支持的 Codex 交互请求');
@@ -231,7 +245,10 @@ export async function openCodexSession({request, config, options, previous, sign
   transport.start();
   await rpc('initialize', {clientInfo: {name: 'dsh-local-orchestrator', version: '0.9.0'}, capabilities: {experimentalApi: false, requestAttestation: false}});
   transport.notify('initialized'); await guarded(transport.flush());
-  const permission = {
+  const permission = options.executionPolicy ? {
+    approvalPolicy: options.executionPolicy.approval,
+    sandbox: options.executionPolicy.sandbox,
+  } : {
     never: {approvalPolicy: 'never'},
     'approve-for-me': {approvalPolicy: 'on-request', approvalsReviewer: 'auto_review', sandbox: 'workspace-write'},
     'dangerously-bypass-approvals-and-sandbox': {approvalPolicy: 'never', sandbox: 'danger-full-access'},

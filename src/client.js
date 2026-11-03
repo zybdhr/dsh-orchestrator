@@ -90,6 +90,8 @@ window.__ModuleLoader__.load({id: 'dsh-local-orchestrator', factory: require => 
   function Settings({data, onSaved, onError}) {
     const [config, setConfig] = useState({...data.config, models: normalizeClientModels(data.config.models)}), [busy, setBusy] = useState(false), [saved, setSaved] = useState('');
     const [catalogs, setCatalogs] = useState(data.modelCatalog ?? {}), [reading, setReading] = useState(false);
+    const executionPolicy = config.executionPolicy ?? {codex: {sandbox: 'workspace-write', approval: 'never'}, claude: {readMode: 'dontAsk', writeMode: 'acceptEdits'}};
+    const updatePolicy = (provider, key, value) => setConfig({...config, executionPolicy: {...executionPolicy, [provider]: {...executionPolicy[provider], [key]: value}}});
     const [picker, setPicker] = useState(false), [modelSearch, setModelSearch] = useState(''), [showExtraModels, setShowExtraModels] = useState(false);
     const pickerElement = React.useRef(null);
     useEffect(() => {
@@ -110,7 +112,7 @@ window.__ModuleLoader__.load({id: 'dsh-local-orchestrator', factory: require => 
       setBusy(true); setSaved('');
       try {
         const routes = Object.fromEntries(Object.entries(config.routes).map(([role, value]) => [role, routeModel(value)?.alias || value]));
-        await api('config', {executionMode: config.executionMode || 'terminal', maxConcurrency: config.maxConcurrency, maxExecutions: config.maxExecutions, taskTimeoutMs: config.taskTimeoutMs, routes, models: config.models}); setSaved('已保存，下次后端调用生效。'); onSaved(); }
+        await api('config', {executionMode: config.executionMode || 'terminal', executionPolicy, maxConcurrency: config.maxConcurrency, maxExecutions: config.maxExecutions, taskTimeoutMs: config.taskTimeoutMs, routes, models: config.models}); setSaved('已保存，下次后端调用生效。'); onSaved(); }
       catch (e) { onError(e.message); } finally { setBusy(false); }
     }
     const updateEntry = (index, patch) => setConfig({...config, models: config.models.map((entry, i) => i === index ? {...entry, ...patch} : entry)});
@@ -218,6 +220,19 @@ window.__ModuleLoader__.load({id: 'dsh-local-orchestrator', factory: require => 
       h('span', {className: 'dsho-route-description'}, description));
     return h('section', {className: 'dsho-config'}, h('h3', null, '模型与推理强度'),
       h('label', {className: 'dsho-execution-mode'}, '子代理运行方式', h('select', {value: config.executionMode || 'terminal', onChange: event => setConfig({...config, executionMode: event.target.value})}, h('option', {value: 'terminal'}, '可见 CLI 终端（可观看、接管）'), h('option', {value: 'protocol'}, '原生协议（后台运行）'))),
+      h('details', {className: 'dsho-execution-permissions'}, h('summary', null, '子代理执行权限与审批'),
+        h('p', {className: 'dsho-muted'}, 'Codex权限单独控制沙盒和审批。完全访问权限会允许访问宿主机GPU设备，也会扩大文件和命令访问范围。'),
+        h('label', null, 'Codex写任务沙盒', h('select', {value: executionPolicy.codex.sandbox, onChange: e => updatePolicy('codex', 'sandbox', e.target.value)},
+          h('option', {value: 'workspace-write'}, '工作目录写入'),
+          h('option', {value: 'danger-full-access'}, '完全访问权限（可用于GPU任务）'))),
+        h('label', null, 'Codex操作审批', h('select', {value: executionPolicy.codex.approval, onChange: e => updatePolicy('codex', 'approval', e.target.value)},
+          h('option', {value: 'never'}, '自动执行沙盒允许的操作'),
+          h('option', {value: 'on-request'}, '按需请求批准（原生协议模式可显示DSH审批）'))),
+        h('label', null, 'Claude Code写任务权限', h('select', {value: executionPolicy.claude.writeMode, onChange: e => updatePolicy('claude', 'writeMode', e.target.value)},
+          h('option', {value: 'acceptEdits'}, '自动允许编辑，其他操作按需审批'),
+          h('option', {value: 'default'}, '按需审批'),
+          h('option', {value: 'bypassPermissions'}, '完全访问权限'))),
+        h('p', {className: 'dsho-muted'}, '只读任务保持受限。Codex终端模式的按需审批需要人工接管终端；原生协议模式通过DSH选项界面转发审批。')),
       h('div', {className: 'dsho-bar'}, h('button', {disabled: reading, onClick: refreshModels}, reading ? '查询原生目录中…' : '刷新模型列表')),
       h('p', {className: 'dsho-notice'}, '主协调 Agent 的模型和推理强度在 DSH 自带的会话模型选择器中设置；下面统一配置被调度的 Codex 和 Claude Code 模型；打开选择器后左侧是 Codex，右侧是 Claude Code。'),
       modelList(),
