@@ -434,3 +434,30 @@ test('原生模型刷新等待完成、合并手动模型并合并并发刷新�
   assert.equal(engine.modelCatalog(), result);
   assert.equal(engine.config.models[0].model, 'manual-model');
 });
+
+
+test('任务资源要求传递给执行者，独立审核继续受只读限制', async t => {
+  const {engine, create, calls} = fixture(t);
+  engine.updateConfig({executionPolicy: {
+    codex: {sandbox: 'danger-full-access', approval: 'on-request'},
+    claude: {readMode: 'dontAsk', writeMode: 'acceptEdits'},
+  }});
+  const run = create([task('gpu-test', {provider: 'codex', resources: {gpu: true}})]);
+  const result = await engine.run(run.id, 'parent', {});
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(calls[0].resources, {gpu: true});
+  assert.deepEqual(calls[0].executionPolicy, {sandbox: 'danger-full-access', approval: 'on-request'});
+  assert.match(calls[0].prompt, /NVIDIA/);
+  assert.deepEqual(calls[1].executionPolicy, {sandbox: 'read-only', approval: 'never'});
+  assert.deepEqual(calls[1].resources, {});
+});
+
+test('任务拒绝无效的资源声明和危险的资源隐式升级', async t => {
+  assert.throws(() => validateGraph([task('gpu', {resources: {gpu: 'yes'}})]), /资源/);
+  assert.throws(() => validateGraph([task('gpu', {resources: {network: true}})]), /资源/);
+  const {engine, create, calls} = fixture(t);
+  const run = create([task('gpu', {provider: 'codex', resources: {gpu: true}, maxAttempts: 1})]);
+  await engine.run(run.id, 'parent', {});
+  assert.equal(calls.length, 0);
+  assert.match(engine.snapshot(run.id, 'parent').tasks[0].error, /GPU/);
+});
