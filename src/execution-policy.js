@@ -5,7 +5,7 @@ export const DEFAULT_EXECUTION_POLICY = Object.freeze({
 
 const SANDBOXES = new Set(['workspace-write', 'danger-full-access']);
 const APPROVALS = new Set(['never', 'on-request']);
-const READ_MODES = new Set(['dontAsk', 'default']);
+const READ_MODES = new Set(['dontAsk']);
 const WRITE_MODES = new Set(['acceptEdits', 'default', 'bypassPermissions']);
 
 export function normalizeExecutionPolicy(value = {}) {
