@@ -32,7 +32,7 @@ export class DshAdapter {
     if (!descriptor) throw new Error(`提供方未注册：${provider}`);
     if (descriptor.inheritsParentContext) throw new Error(`编排任务要求独立上下文，不能使用继承父历史的提供方：${provider}`);
     const writeAccess = provider === 'claude-code' && access === 'write';
-    const configured = await this.configureProvider(this.ctx, provider, {...modelOptions, verification, ...(writeAccess ? {writeAccess: true} : {}), executionPolicy, approvalContext: {parent, signal, onPermissionWait, ctx: this.ctx, label}, ...(continuity ? {continuity} : {})});
+    const configured = await this.configureProvider(this.ctx, provider, {...modelOptions, verification, ...(writeAccess ? {writeAccess: true} : {}), executionPolicy, approvalContext: {parent, signal, onPermissionWait, ctx: this.ctx, label, access}, ...(continuity ? {continuity} : {})});
     let activation;
     try {
       activation = await this.ctx.subagents.startActivation({
