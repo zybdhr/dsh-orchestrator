@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, openSy
 import { join, isAbsolute } from 'node:path';
 import { hostname } from 'node:os';
 import {validateModels, modelCatalog, normalizeModelsConfig, defaultModelEntry as findDefaultModelEntry} from './native-models.js';
+import {normalizeExecutionPolicy, resolveExecutionPolicy} from './execution-policy.js';
 
 export const LIMITS = Object.freeze({ tasks: 32, runs: 200, events: 500, prompt: 16000, output: 16000 });
 const NODE_STATES = new Set(['pending', 'running', 'reviewing', 'completed', 'failed', 'interrupted', 'cancelled']);
@@ -35,6 +36,8 @@ export function validateGraph(tasks) {
     const dependsOn = t.dependsOn ?? [];
     assert(Array.isArray(dependsOn) && dependsOn.every(id => typeof id === 'string') && new Set(dependsOn).size === dependsOn.length, `${t.id} 依赖格式无效`);
     const access = t.access ?? 'write';
+    const resources = t.resources ?? {};
+    assert(resources && typeof resources === 'object' && !Array.isArray(resources) && Object.keys(resources).every(k => k === 'gpu') && (resources.gpu === undefined || typeof resources.gpu === 'boolean'), '任务资源格式无效');
     assert(['read', 'write'].includes(access), `${t.id} access 必须是 read 或 write`);
     const verification = t.verification ?? [];
     assert(Array.isArray(verification) && verification.length <= 2 && new Set(verification).size === verification.length && verification.every(v => ['pytest', 'typescript'].includes(v)), `${t.id} verification 只允许 pytest/typescript`);
@@ -44,7 +47,7 @@ export function validateGraph(tasks) {
     assert(t.fallbackProviders === undefined || (Array.isArray(t.fallbackProviders) && t.fallbackProviders.length <= 3 && t.fallbackProviders.every(p => typeof p === 'string' && p.length > 0 && p.length <= 200)), `${t.id} 备用提供方无效`);
     const maxAttempts = t.maxAttempts ?? 2;
     assert(Number.isInteger(maxAttempts) && maxAttempts >= 1 && maxAttempts <= 3, `${t.id} 重试上限必须为 1–3`);
-    return { id: t.id, title: t.title, prompt: t.prompt, acceptance: t.acceptance, dependsOn: [...dependsOn], role, access, verification: [...verification], maxAttempts,
+    return { id: t.id, title: t.title, prompt: t.prompt, acceptance: t.acceptance, dependsOn: [...dependsOn], role, access, resources: {...resources}, verification: [...verification], maxAttempts,
       ...(t.provider ? {provider: t.provider} : {}), ...(t.reviewer ? {reviewer: t.reviewer} : {}), fallbackProviders: t.fallbackProviders ?? [] };
   });
   const byId = new Map(normalized.map(t => [t.id, t]));
@@ -123,9 +126,10 @@ export class Store {
 export class Orchestrator {
   constructor({root, adapter, config = {}}) {
     const stored = existsSync(join(root, 'settings.json')) ? JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8')) : {};
-    const merged = {executionMode: 'terminal', maxConcurrency: 2, maxExecutions: 40, taskTimeoutMs: 600000, models: {}, routes: {plan: 'codex', implement: 'claude-code', test: 'codex', research: 'codex', review: 'codex'}, ...config, ...stored};
+    const merged = {executionMode: 'terminal', executionPolicy: normalizeExecutionPolicy(), maxConcurrency: 2, maxExecutions: 40, taskTimeoutMs: 600000, models: {}, routes: {plan: 'codex', implement: 'claude-code', test: 'codex', research: 'codex', review: 'codex'}, ...config, ...stored};
     // 旧版 settings.json 的 models 是单模型对象；启动时迁移为多模型别名数组，原文件在下次保存时再落盘。
     merged.models = normalizeModelsConfig(stored.models !== undefined ? stored.models : (config.models ?? {}));
+    merged.executionPolicy = normalizeExecutionPolicy(merged.executionPolicy);
     this.config = merged;
     this.validateConfig(this.config);
     this.adapter = adapter; this.store = new Store(root); this.active = null; this.listeners = new Set();
@@ -178,6 +182,7 @@ export class Orchestrator {
   }
   validateConfig(c) {
     assert(['terminal', 'protocol'].includes(c.executionMode), '执行方式必须是 terminal 或 protocol');
+    normalizeExecutionPolicy(c.executionPolicy);
     assert(Number.isInteger(c.maxConcurrency) && c.maxConcurrency >= 1 && c.maxConcurrency <= 4, '并发必须为 1–4');
     assert(Number.isInteger(c.maxExecutions) && c.maxExecutions >= 2 && c.maxExecutions <= 100, '执行次数上限必须为 2–100');
     assert(Number.isInteger(c.taskTimeoutMs) && c.taskTimeoutMs >= 1000 && c.taskTimeoutMs <= 3600000, '单次超时必须为 1 秒–1 小时');
@@ -186,9 +191,10 @@ export class Orchestrator {
   }
   updateConfig(patch) {
     assert(!this.active, '运行期间不可修改调度配置');
-    assert(patch && Object.keys(patch).every(k => ['executionMode', 'maxConcurrency', 'maxExecutions', 'taskTimeoutMs', 'routes', 'models'].includes(k)), '配置包含未知字段');
+    assert(patch && Object.keys(patch).every(k => ['executionMode', 'executionPolicy', 'maxConcurrency', 'maxExecutions', 'taskTimeoutMs', 'routes', 'models'].includes(k)), '配置包含未知字段');
     const next = {...this.config, ...patch};
     next.models = normalizeModelsConfig('models' in patch ? patch.models : next.models);
+    next.executionPolicy = normalizeExecutionPolicy(next.executionPolicy);
     this.validateConfig(next);
     for (const [role, target] of Object.entries(next.routes)) {
       const resolved = this.resolveTarget(target, `角色 ${role} 路由`, next.models);
@@ -346,6 +352,9 @@ export class Orchestrator {
     const slot = phase === '审核' ? 'review' : 'execution';
     const provider = target.provider, modelAlias = target.alias || '';
     const modelOptions = {model: target.model ?? '', reasoningEffort: target.reasoningEffort ?? ''};
+    const access = phase === '审核' || operation === 'compact' ? 'read' : task.access;
+    const resources = access === 'write' ? task.resources ?? {} : {};
+    const executionPolicy = resolveExecutionPolicy(this.config.executionPolicy, provider, access, resources);
     const binding = createHash('sha256').update(JSON.stringify({owner: s.owner, run: s.id, cwd: s.cwd, task: task.id,
       prompt: task.prompt, acceptance: task.acceptance, role: task.role, access: task.access, phase, provider, modelAlias, modelOptions})).digest('hex');
     task.sessions ??= {};
@@ -405,7 +414,7 @@ export class Orchestrator {
             this.record(s, 'approval-resolved', `${phase}子代理授权等待已结束`, task.id);
           }
         },
-        verification: task.verification ?? [], access: phase === '审核' || operation === 'compact' ? 'read' : task.access,
+        verification: task.verification ?? [], access, resources, executionPolicy,
         continuity: {binding, previous: previous ? clone(previous) : undefined, operation,
           onSession: session => {task.sessions[slot] = clone(session); call.nativeSessionId = session.id; call.sessionResumed = session.id === previous?.id; this.record(s, 'session-checkpoint', `${phase}原生会话已保存`, task.id);},
           onEvent: event => {
