@@ -61,7 +61,7 @@ export class VisibleTerminals {
     const config = this.ctx.subagents.getProvider(args.provider)?.config;
     if (!config) throw failure('CLI 后端未启用');
     const compatibility = args.provider === 'claude-code' ? claudeTerminalCompatibility(config.env) : undefined;
-    const profileKey = hash({provider: args.provider, config, options: args.modelOptions, access: args.access, verification: args.verification, transport: 'visible-terminal-v1', compatibility});
+    const profileKey = hash({provider: args.provider, config, options: args.modelOptions, access: args.access, executionPolicy: args.executionPolicy, verification: args.verification, transport: 'visible-terminal-v1', compatibility});
     const existing = [...this.entries.values()].find(entry => entry.binding === args.continuity.binding && entry.profileKey === profileKey && entry.pty);
     if (existing) {
       if (existing.control === 'human') throw failure('该子代理终端已被人工接管，请先交还控制权');
@@ -90,7 +90,7 @@ export class VisibleTerminals {
     if (args.provider === 'codex') {
       const runtime = this.resolveRuntime({pathEnv: config.env?.PATH ?? process.env.PATH});
       argv = [...runtime.argv, ...(entry.sessionId ? ['resume', entry.sessionId] : []), '--no-alt-screen', '-C', args.cwd,
-        '-s', args.access === 'write' ? 'workspace-write' : 'read-only', '-c', 'approval_policy="never"', '-c', 'check_for_update_on_startup=false', '-c', `notify=${JSON.stringify(hook)}`,
+        '-s', args.executionPolicy?.sandbox ?? (args.access === 'write' ? 'workspace-write' : 'read-only'), '-c', `approval_policy=${JSON.stringify(args.executionPolicy?.approval ?? 'never')}`,  '-c', 'check_for_update_on_startup=false', '-c', `notify=${JSON.stringify(hook)}`,
         ...(args.modelOptions.model ? ['-m', args.modelOptions.model] : []),
         ...(args.modelOptions.reasoningEffort ? ['-c', `model_reasoning_effort=${JSON.stringify(args.modelOptions.reasoningEffort)}`] : [])];
     } else {
@@ -98,7 +98,7 @@ export class VisibleTerminals {
       const command = hook.map(shellQuote).join(' ');
       const hooks = Object.fromEntries(['SessionStart', 'UserPromptSubmit', 'PermissionRequest', 'Notification', 'Stop', 'StopFailure', 'SessionEnd'].map(event => [event, [{hooks: [{type: 'command', command, timeout: event === 'PermissionRequest' ? 310 : 10}]}]]));
       argv = withClaudeTools({argv: [executable, ...(reusable ? ['--resume', entry.sessionId] : ['--session-id', entry.sessionId]),
-        '--ax-screen-reader', '--permission-mode', args.access === 'write' ? 'acceptEdits' : 'dontAsk', '--settings', JSON.stringify({hooks, env: compatibility}),
+        '--ax-screen-reader', '--permission-mode', args.executionPolicy?.permissionMode ?? (args.access === 'write' ? 'acceptEdits' : 'dontAsk'), '--settings', JSON.stringify({hooks, env: compatibility}),
         '--disallowedTools', 'AskUserQuestion,ExitPlanMode',
         ...(args.modelOptions.model ? ['--model', args.modelOptions.model] : []),
         ...(args.modelOptions.reasoningEffort ? ['--effort', args.modelOptions.reasoningEffort] : [])]},
