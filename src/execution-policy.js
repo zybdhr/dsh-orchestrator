@@ -13,12 +13,10 @@ export function normalizeExecutionPolicy(value = {}) {
   if (Object.keys(value).some(key => !['codex', 'claude'].includes(key))) throw new Error('未知的执行权限提供方');
   const codex = {...DEFAULT_EXECUTION_POLICY.codex, ...(value.codex ?? {})};
   const claude = {...DEFAULT_EXECUTION_POLICY.claude, ...(value.claude ?? {})};
-  if (!value.codex || typeof value.codex === 'object' && !Array.isArray(value.codex)) {
-    if (value.codex && Object.keys(value.codex).some(key => !['sandbox', 'approval'].includes(key))) throw new Error('Codex包含未知权限字段');
-  } else throw new Error('Codex权限配置无效');
-  if (!value.claude || typeof value.claude === 'object' && !Array.isArray(value.claude)) {
-    if (value.claude && Object.keys(value.claude).some(key => !['readMode', 'writeMode'].includes(key))) throw new Error('Claude包含未知权限字段');
-  } else throw new Error('Claude权限配置无效');
+  for (const [name, fields] of [['codex', ['sandbox', 'approval']], ['claude', ['readMode', 'writeMode']]]) {
+    if (value[name] !== undefined && (!value[name] || typeof value[name] !== 'object' || Array.isArray(value[name]))) throw new Error(name + '权限配置必须是对象');
+    if (value[name] && Object.keys(value[name]).some(key => !fields.includes(key))) throw new Error(name + '包含未知权限字段');
+  }
   if (!SANDBOXES.has(codex.sandbox) || !APPROVALS.has(codex.approval)) throw new Error('Codex沙盒或审批策略无效');
   if (!READ_MODES.has(claude.readMode) || !WRITE_MODES.has(claude.writeMode)) throw new Error('Claude权限模式无效');
   return {codex, claude};
