@@ -22,17 +22,17 @@ export class DshAdapter {
     }
     return catalog;
   }
-  async execute({provider, parent, cwd, prompt, signal, label, onStarted, modelOptions = {}, access = 'read', verification = [], continuity, executionMode, terminalInfo, onTerminal, onAttention, onPermissionWait}) {
+  async execute({provider, parent, cwd, prompt, signal, label, onStarted, modelOptions = {}, access = 'read', verification = [], continuity, executionMode, terminalInfo, onTerminal, onAttention, onPermissionWait, executionPolicy, resources}) {
     if (!['codex', 'claude-code'].includes(provider)) throw new Error('此模式只允许通过 Codex 或 Claude Code 执行任务');
     if (executionMode === 'terminal') {
       if (!this.terminals) throw new Error('当前宿主未装配可见子代理终端');
-      return this.terminals.execute({provider, parent, cwd, prompt, signal, label, onStarted, modelOptions, access, verification, continuity, terminalInfo, onTerminal, onAttention, onPermissionWait});
+      return this.terminals.execute({provider, parent, cwd, prompt, signal, label, onStarted, modelOptions, access, verification, continuity, terminalInfo, onTerminal, onAttention, onPermissionWait, executionPolicy, resources});
     }
     const descriptor = this.ctx.subagents.getProvider(provider);
     if (!descriptor) throw new Error(`提供方未注册：${provider}`);
     if (descriptor.inheritsParentContext) throw new Error(`编排任务要求独立上下文，不能使用继承父历史的提供方：${provider}`);
     const writeAccess = provider === 'claude-code' && access === 'write';
-    const configured = await this.configureProvider(this.ctx, provider, {...modelOptions, verification, ...(writeAccess ? {writeAccess: true} : {}), ...(continuity ? {continuity} : {})});
+    const configured = await this.configureProvider(this.ctx, provider, {...modelOptions, verification, ...(writeAccess ? {writeAccess: true} : {}), executionPolicy, approvalContext: {parent, signal, onPermissionWait, ctx: this.ctx, label}, ...(continuity ? {continuity} : {})});
     let activation;
     try {
       activation = await this.ctx.subagents.startActivation({
