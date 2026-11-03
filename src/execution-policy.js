@@ -29,7 +29,7 @@ export function resolveExecutionPolicy(value, provider, access, resources = {}) 
   if (provider === 'codex') {
     const sandbox = access === 'read' ? 'read-only' : policy.codex.sandbox;
     if (resources?.gpu && sandbox !== 'danger-full-access') throw new Error('当前Codex沙盒可能无法访问GPU；请在设置中显式选择完全访问权限，并使用可写任务执行GPU操作');
-    return {sandbox, approval: policy.codex.approval};
+    return {sandbox, approval: access === 'read' ? 'never' : policy.codex.approval};
   }
   if (provider === 'claude-code') {
     return {permissionMode: access === 'read' ? policy.claude.readMode : policy.claude.writeMode};
